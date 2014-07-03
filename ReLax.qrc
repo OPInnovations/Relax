@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/">
+        <file>images/bioshare-BGtiletexturedMixedGloss600px.jpg</file>
+        <file>images/LEDbar.png</file>
+        <file>images/button500x500.png</file>
+    </qresource>
+</RCC>
