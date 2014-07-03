@@ -1,29 +1,28 @@
 /*** ****************************
   * HW interface functions header file
+  * for UCE on OSX
   * OP Innovations
   *
-  * v1.10 - 20131121	mpeng
-  * --------------------------
-  * 1. Added "on" and "off" mode setting for controller (UC).
-  * 2. Added micro SD slot SPI interface on and off commands.
-  * 3. Added opitsign trigger command (needs uSD SPI interface to be turned off
-  * 4. Added battery cycling command
   *
-  * v1.00 - 20130520	mpeng
+  * v1.00 - 20130904	mpeng
   * --------------------------
   * 1. Release version
   *
   * ****************************/
 
-#ifndef OPI_UCE_WIN_H
-#define OPI_UCE_WIN_H
+#ifndef OPI_UCE_OSX_H
+#define OPI_UCE_OSX_H
 
 /***
   * Include Files
   */
-#include <windows.h>	// for com port opening related functions
-#include <stdio.h>	
+#include <stdio.h>
 
+/***
+  * Typedef
+  */
+typedef int HANDLE;	// make it so code parts don't have to be changed
+            // when switching from windows version SDK
 
 /***
   * Definitions
@@ -99,9 +98,6 @@ int opiuce_getrelaxparams(HANDLE *comportptr, OPIPKT_t *pktptr);
 int opiuce_setrelaxparams(HANDLE *comportptr, int thx, int thm, int offl, int th3gm, int th3bm, int th2gm, int th2bm, int th1gm, int th1bm, int offm);
 int opiuce_offmode(HANDLE *comportptr);
 int opiuce_onmode(HANDLE *comportptr);
-int opiuce_turnusdspion(HANDLE *comportptr);
-int opiuce_turnusdspioff(HANDLE *comportptr);
-int opiuce_triggertsign(HANDLE *comporptr, OPIPKT_t *pktptr);
-int opiuce_battcycle(HANDLE *comportptr);
 
-#endif // opi_uce_win_H
+
+#endif // OPI_UCE_OSX_H

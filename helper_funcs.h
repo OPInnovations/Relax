@@ -1,7 +1,7 @@
 #ifndef helper_funcs_H
 #define helper_funcs_H
 #include <QtGui>
-#include "opi_uce_win.h"
+#include "opi_uce_osx.h"
 #include "CommonParameters.h"
 
 qint32 setUCETime(HANDLE *comportptr);

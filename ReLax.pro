@@ -12,7 +12,6 @@ TEMPLATE = app
 
 SOURCES += main.cpp\
         relax.cpp \
-    opi_uce_win.cpp \
     faderwidget.cpp \
     qqwidget.cpp \
     FFT/qwindowfunction.cpp \
@@ -22,10 +21,10 @@ SOURCES += main.cpp\
     FFT/qfouriercalculator.cpp \
     FFT/qcomplexnumber.cpp \
     postureviewer/twodaccelviewer.cpp \
-    helper_funcs.cpp
+    helper_funcs.cpp \
+    opi_uce_osx.cpp
 
 HEADERS  += relax.h \
-    opi_uce_win.h \
     faderwidget.h \
     CommonParameters.h \
     qqwidget.h \
@@ -56,7 +55,8 @@ HEADERS  += relax.h \
     FFT/Array.hpp \
     FFT/Array.h \
     postureviewer/twodaccelviewer.h \
-    helper_funcs.h
+    helper_funcs.h \
+    opi_uce_osx.h
 
 FORMS    += relax.ui \
     postureviewer/twodaccelviewer.ui
@@ -64,8 +64,5 @@ FORMS    += relax.ui \
 RESOURCES += \
     ReLax.qrc
 
-
-RC_FILE += images/myIcon.rc
-
-OTHER_FILES +=
+ICON = images/opi_ico.icns
 

@@ -1,31 +1,71 @@
 /*** ****************************
   * HW interface functions definition file
+  * for UCE on OSX
   * OP Innovations
   *
-  * v1.10 - 20130930	mpeng
-  * --------------------------
-  * 1. Added "on" and "off" mode setting for controller (UC).
-  * 2. Added micro SD slot SPI interface on and off commands.
-  * 3. Added opitsign trigger command (needs uSD SPI interface to be turned off
-  * 4. Added battery cycling command
   *
-  * v1.05 - 20130603	mpeng
-  * --------------------------
-  * 1. Adjusted com port opening so that it opens COM1 to COM50
-  *     instead of COM1 to COM20
-  *
-  * v1.00 - 20130520	mpeng
+  * v1.00 - 20130905	mpeng
   * --------------------------
   * 1. Release version
   *
   * ****************************/
 
-#include "opi_uce_win.h"
+#include "opi_uce_osx.h"
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <dirent.h>
+#include <string.h>
 
 
 /***
   * Function definitions
   */
+
+/***
+  *	Get a specified number of bytes from the serial com port
+  * with the specified number of bytes to the specified buffer in
+  * a specified number of retries
+  *	Inputs:
+  *		comportptr, pointer to int
+  *     bytep, pointer to the unsigned char buffer where data will be put
+  *     bytesToRead, number of bytes to read
+  *     retries, number of retries (in terms of loop)
+  *	Returns:
+  *		non-negative number of bytes read
+  *     -1 if error
+  */
+int getCOMBytes(int *comportptr, unsigned char* bytep, int bytesToRead, int retries)
+{
+    int bytesRead;
+    int bytesToGo;
+    unsigned char *nextBytep;
+
+    bytesToGo = bytesToRead;
+    nextBytep = bytep;
+
+    for(; retries; retries--)
+    {
+        bytesRead = read(*comportptr, (char *)nextBytep, bytesToGo);
+        if(bytesRead < 0)
+        {
+            continue;
+        }
+        else if(bytesRead < bytesToGo)
+        {
+            nextBytep = &(nextBytep[bytesRead]);
+            bytesToGo -= bytesRead;
+        }
+        else
+        {
+            bytesToGo -= bytesRead;
+            break;
+        }
+    }
+
+    return (bytesToRead-bytesToGo);
+}
 
 /***
   *	Get an OPI packet from the com port,
@@ -43,28 +83,27 @@ int opipkt_get_com(OPIPKT_t* pktptr, HANDLE *comportptr)
 {
     unsigned short i, j;
     unsigned short pktChksm, calcChksm=0;
-    unsigned char tempuint8;
+    unsigned char tempui8;
     unsigned char buf[10];
-    DWORD readIn;
 
     for (j = 0; j < 20; j++)	// 20 retries
     {
-        if(!(ReadFile (*comportptr, &tempuint8, 1, &readIn, 0))) continue;
-        if (tempuint8 != SYNCBYTE) continue;
-        if(!(ReadFile (*comportptr, buf, 4, &readIn, 0))) continue;
-        if (buf[0] != SYNCBYTE) continue;
+        if(getCOMBytes(comportptr, &tempui8, 1, 100000) < 1) continue;
+        if(tempui8 != SYNCBYTE) continue;
+        if(getCOMBytes(comportptr, buf, 4, 100000) < 4) continue;
+        if(buf[0] != SYNCBYTE) continue;
         pktptr->length = buf[1] << 8;
         pktptr->length += buf[2] - 1;
 
-        if (!(pktptr->length+1)) return 2; // empty packet
+        if(!(pktptr->length+1)) return 2; // empty packet
         pktptr->dataCode = buf[3];
         calcChksm += buf[3];
 
-        if(!(ReadFile (*comportptr, pktptr->payload, pktptr->length, &readIn, 0))) continue;
+        if(getCOMBytes(comportptr, pktptr->payload, pktptr->length, 100000) < pktptr->length) continue;
 
         for(i = 0; i < pktptr->length; i++) calcChksm += pktptr->payload[i];
 
-        if(!(ReadFile (*comportptr, buf, 2, &readIn, 0))) continue;
+        if(getCOMBytes(comportptr, buf, 2, 100000) < 2) continue;
         pktChksm = buf[0] << 8;
         pktChksm += buf[1];
 
@@ -91,7 +130,6 @@ int opipkt_put_com(OPIPKT_t* pktptr, HANDLE* comportptr)
     unsigned short i;
     unsigned short calcChksm=0;
     unsigned char buf[256];
-    DWORD writeOut;
 
     buf[0] = SYNCBYTE;
     buf[1] = SYNCBYTE;
@@ -105,8 +143,8 @@ int opipkt_put_com(OPIPKT_t* pktptr, HANDLE* comportptr)
     }
     pktptr->payload[i] = calcChksm >> 8;    // use these unused bytes
     pktptr->payload[i+1] = calcChksm;       // so one less call to com port
-    if(!WriteFile(*comportptr, buf, 5, &writeOut, 0)) return -1;
-    if(!WriteFile(*comportptr, pktptr->payload, pktptr->length+2, &writeOut, 0)) return -1;
+    if(write(*comportptr, buf, 5) < 5) return -1;
+    if(write(*comportptr, pktptr->payload, pktptr->length+2) < pktptr->length+2) return -1;
     return 0;
 }	
 
@@ -124,215 +162,238 @@ int opipkt_put_com(OPIPKT_t* pktptr, HANDLE* comportptr)
 int opi_openuce_com(HANDLE* comportptr)
 {
     int i, j, pktLen;
-    DCB dcbPort;
-    COMMTIMEOUTS comTimeOut;
-    HANDLE comPort;
-    char pcCommPort[80];
     char comName[80];
     unsigned char recBuf[256];
     unsigned short pktChksm, calcChksm;
-    unsigned char tempuint8;
+    unsigned char tempui8;
     unsigned short tempui16;
-    DWORD readIn, writeOut;
+    int comRetries;
+    struct termios newtio;
+    speed_t baud = B115200;
+    DIR *dp;
+    struct dirent *ep;
 
-    for (i = 1; i < 51; i++)
+    comRetries = 100000;
+
+    // compile list of devs
+    dp = opendir("/dev");
+    if(dp == NULL)
     {
-        sprintf(comName, "\\\\.\\COM%d", i);
-        strcpy(pcCommPort, comName);
-        comPort = CreateFileA( pcCommPort, (GENERIC_READ | GENERIC_WRITE), 0, NULL, OPEN_EXISTING, 0, NULL );
-        if (!(comPort))
-        {
-            //printf("Couldn't open COM%d\n", i);
-            CloseHandle(comPort);
-            continue;
-        }
-        // Clear the comm port of errors and leftover junk
-        ClearCommError(comPort, 0, 0);
-        PurgeComm(comPort, PURGE_RXABORT|PURGE_TXABORT|PURGE_RXCLEAR|PURGE_TXCLEAR);
+        return -1;
+    }
 
-        if (!GetCommState(comPort,&dcbPort))
+    for (i = 0; i < 20; i++)
+    {
+        // get a dev that looks like a usb cdc device
+        while(ep = readdir(dp))
         {
-            //printf("Couldn't get COM%d state\n", i);
-            CloseHandle(comPort);
-            continue;
+            if(!strncmp(ep->d_name,"tty.usbmodem",12)) break;
         }
-
-        // Set port characteristics
-        dcbPort.BaudRate = CBR_115200;
-        dcbPort.ByteSize = 8;
-        dcbPort.Parity = NOPARITY;
-        dcbPort.StopBits = ONESTOPBIT;
-
-        if (!SetCommState(comPort,&dcbPort))
+        if(!ep)
         {
-            printf("Couldn't set COM%d state\n", i);
-            continue;
+            break;
         }
-        if (!GetCommTimeouts(comPort,&comTimeOut))
+        sprintf(comName, "/dev/%s", ep->d_name);   // may need to change this to what OS lists USB CDC
+        *comportptr=open(comName, O_RDWR | O_NDELAY);
+        if(*comportptr < 0)
         {
-            printf("Couldn't get COM%d timeouts\n", i);
-            CloseHandle(comPort);
-            continue;
-        }
-        // Set timeout characteristics to be more forgiving
-        comTimeOut.ReadIntervalTimeout = 25;	// ms
-        comTimeOut.ReadTotalTimeoutMultiplier = 25;
-        comTimeOut.ReadTotalTimeoutConstant = 25;
-        comTimeOut.WriteTotalTimeoutMultiplier = 25;
-        comTimeOut.WriteTotalTimeoutConstant = 25;
-        if (!SetCommTimeouts(comPort,&comTimeOut))
-        {
-            printf("Couldn't set COM%d timeouts\n", i);
-            CloseHandle(comPort);
+            printf("Couldn't open port %s", comName);
+            opi_closeuce_com(comportptr);
             continue;
         }
 
-        // Clear the comm port of leftover junk
-        PurgeComm(comPort, PURGE_RXABORT|PURGE_TXABORT|PURGE_RXCLEAR|PURGE_TXCLEAR);
+        // flush is to be done after opening
+        tcflush(*comportptr, TCIOFLUSH);
+
+        // set port parameters
+        cfsetospeed(&newtio, baud);
+        cfsetispeed(&newtio, baud);
+        newtio.c_cflag = (newtio.c_cflag & ~CSIZE) | CS8;
+        newtio.c_cflag |= CLOCAL | CREAD;
+        newtio.c_cflag &= ~(PARENB | PARODD);   // no parity
+        newtio.c_cflag &= ~CRTSCTS; // no hardware handshake
+        newtio.c_cflag &= ~CSTOPB;  // 1 stop bit
+        newtio.c_iflag = IGNBRK;
+        newtio.c_iflag &= ~(IXON|IXOFF|IXANY); // no software handshake
+        newtio.c_lflag=0;
+        newtio.c_oflag=0;
+        newtio.c_cc[VTIME]=1;
+        newtio.c_cc[VMIN]=60;
+        if (tcsetattr(*comportptr, TCSANOW, &newtio)!=0)
+        {
+            printf("tcsetattr() 1 failed");
+            opi_closeuce_com(comportptr);
+        continue;
+        }
 
         // Starting putting stuff on the comport
-        tempuint8 = SYNCBYTE;
-        if (!(WriteFile(comPort, &tempuint8, 1, &writeOut, 0)))	// first sync byte
+        tempui8 = SYNCBYTE;
+        if(write(*comportptr, &tempui8, 1) < 0)
         {
-            printf("Couldn't put 1st sync byte in COM%d\n", i);
-            CloseHandle(comPort);
+            printf("Couldn't put 1st sync byte");
+            opi_closeuce_com(comportptr);
             continue;
         }
-        if (!(WriteFile(comPort, &tempuint8, 1, &writeOut, 0)))	// second sync byte
+        if(write(*comportptr, &tempui8, 1) < 0)
         {
-            printf("Couldn't put 2nd sync byte in COM%d\n", i);
-            CloseHandle(comPort);
+            printf("Couldn't put 2nd sync byte");
+            opi_closeuce_com(comportptr);
             continue;
         }
+
         tempui16 = 2;
-        tempuint8 = (tempui16 >> 8) & 0xFF;
-        if (!(WriteFile(comPort, &tempuint8, 1, &writeOut, 0)))	// length
+        tempui8 = (tempui16 >> 8) & 0xFF;
+        if(write(*comportptr, &tempui8, 1) < 0)
         {
-            printf("Couldn't put length high byte in COM%d\n", i);
-            CloseHandle(comPort);
+            printf("Couldn't put length high byte");
+            opi_closeuce_com(comportptr);
             continue;
         }
-        tempuint8 = tempui16 & 0xFF;
-        if (!(WriteFile(comPort, &tempuint8, 1, &writeOut, 0)))	// length
+        tempui8 = tempui16 & 0xFF;
+        if(write(*comportptr, &tempui8, 1) < 0)
         {
-            printf("Couldn't put length low byte in COM%d\n", i);
-            CloseHandle(comPort);
+            printf("Couldn't put length low byte");
+            opi_closeuce_com(comportptr);
             continue;
         }
-
-        tempuint8 = 0x10;
-        if (!(WriteFile(comPort, &tempuint8, 1, &writeOut, 0)))	// dataCode
+        tempui8 = 0x10;
+        if(write(*comportptr, &tempui8, 1) < 0)
         {
-            printf("Couldn't put dataCode byte in COM%d\n", i);
-            CloseHandle(comPort);
+            printf("Couldn't put dataCode byte");
+            opi_closeuce_com(comportptr);
             continue;
         }
-
-        tempuint8 = 0x01;
-        if (!(WriteFile(comPort, &tempuint8, 1, &writeOut, 0)))	// payload
+        tempui8 = 0x01;
+        if(write(*comportptr, &tempui8, 1) < 0)
         {
-            printf("Couldn't put payload[0] byte in COM%d\n", i);
-            CloseHandle(comPort);
+            printf("Couldn't put payload[0] byte");
+            opi_closeuce_com(comportptr);
             continue;
         }
-        tempuint8 = 0x00;	// precalculated
-        if (!(WriteFile(comPort, &tempuint8, 1, &writeOut, 0)))	// chksm high byte
+        tempui8 = 0x00;	// precalculated
+        if(write(*comportptr, &tempui8, 1) < 0)
         {
-            printf("Couldn't put checksum byte in COM%d\n", i);
-            CloseHandle(comPort);
+            printf("Couldn't put chksm high byte");
+            opi_closeuce_com(comportptr);
             continue;
         }
-        tempuint8 = 0x11;	// precalculated
-        if (!(WriteFile(comPort, &tempuint8, 1, &writeOut, 0)))	// chksm low byte
+        tempui8 = 0x11;	// precalculated
+        if(write(*comportptr, &tempui8, 1) < 0)
         {
-            printf("Couldn't put checksum byte in COM%d\n", i);
-            CloseHandle(comPort);
+            printf("Couldn't put chksm low byte");
+            opi_closeuce_com(comportptr);
             continue;
         }
 
         // Put was successful, now get
-        for (j = 0; j < 3; j++)	// must get a syncbyte in 3
+        for(j = 0; j < 3; j++)
         {
-            if (!(ReadFile (comPort, &tempuint8, 1, &readIn, 0))) continue;
-            if ((tempuint8 != SYNCBYTE) && (!(readIn))) continue;	// first sync byte
-            if (!(ReadFile (comPort, &tempuint8, 1, &readIn, 0))) continue;
-            if ((tempuint8 != SYNCBYTE) && (!(readIn))) continue;	// second sync byte
-            break;	// got 2 sync bytes
+            if(getCOMBytes(comportptr, &tempui8, 1, comRetries) < 1)
+            {
+                printf("Couldn't get 1st sync byte");
+                opi_closeuce_com(comportptr);
+                continue;
+            }
+            if(tempui8 != SYNCBYTE)
+            {
+                printf("1st sync byte wrong");
+                opi_closeuce_com(comportptr);
+                continue;
+            }
+            if(getCOMBytes(comportptr, &tempui8, 1, comRetries) < 1)
+            {
+                printf("Couldn't get 2nd sync byte");
+                opi_closeuce_com(comportptr);
+                continue;
+            }
+            if(tempui8 != SYNCBYTE)
+            {
+                printf("2nd sync byte wrong");
+                opi_closeuce_com(comportptr);
+                continue;
+            }
+            break;  // if got here sync bytes right
         }
-        if (j >= 3)
+        if(j == 3)
         {
-            CloseHandle(comPort);
-            printf("Couldn't get sync bytes in COM%d\n", i);
-            continue;	// did not get 2 sync bytes
-        }
-        if (!(ReadFile (comPort, &tempuint8, 1, &readIn, 0)))
-        {
-            CloseHandle(comPort);
-            printf("Couldn't get length high byte in COM%d\n", i);
+            printf("Couldn't get sync bytes");
+            opi_closeuce_com(comportptr);
             continue;
         }
-        tempui16 = tempuint8 << 8;
-        if (!(ReadFile (comPort, &tempuint8, 1, &readIn, 0)))
+
+        if(getCOMBytes(comportptr, &tempui8, 1, comRetries) < 1)
         {
-            CloseHandle(comPort);
-            printf("Couldn't get length low byte in COM%d\n", i);
+            printf("Couldn't get length high byte");
+            opi_closeuce_com(comportptr);
             continue;
         }
-        tempui16 += tempuint8;
-        // if ((tempuint8 != (32+96)) || (!(readIn)))
-        if ((tempui16 != (OPIUCESTLEN)) || (!(readIn)))
+        tempui16 = tempui8 << 8;
+
+        if(getCOMBytes(comportptr, &tempui8, 1, comRetries) < 1)
         {
-            CloseHandle(comPort);
-            printf("Packet length not right in COM%d, Length %d\n", i, tempui16);
-            continue;	// packet length not right
+            printf("Couldn't get length low byte");
+            opi_closeuce_com(comportptr);
+            continue;
+        }
+
+        tempui16 += tempui8;
+        if(tempui16 != OPIUCESTLEN)
+        {
+            printf("Packet length incorrect, Length %d", tempui16);
+            opi_closeuce_com(comportptr);
+            continue;
         }
         calcChksm = 0;
-        pktLen = tempuint8;
-        for (j = 0; j < pktLen; j++)
+        pktLen = tempui8;
+        for(j = 0; j < pktLen; j++)
         {
-            if(!(ReadFile (comPort, &tempuint8, 1, &readIn, 0))) break;
-            recBuf[j] = tempuint8;
+            if(getCOMBytes(comportptr, &tempui8, 1, comRetries) < 1)
+            {
+                break;
+            }
+            recBuf[j] = tempui8;
             calcChksm += recBuf[j];
         }
-        if (j < pktLen)
+        if(j < pktLen)
         {
-            CloseHandle(comPort);
-            printf("Didn't get all data in payload in COM%d\n", i);
-            continue;	// didn't get all the data
+            printf("Didn't get all data in payload");
+            opi_closeuce_com(comportptr);
+            continue;
         }
-        if(!(ReadFile (comPort, &tempuint8, 1, &readIn, 0)))
+        if(getCOMBytes(comportptr, &tempui8, 1, comRetries) < 1)
         {
-            CloseHandle(comPort);
-            printf("Didn't get checksum high byte in COM%d\n", i);
-            continue;	// didn't get checksum data
+            printf("Couldn't get chksm high byte");
+            opi_closeuce_com(comportptr);
+            continue;
         }
-        pktChksm = tempuint8 << 8;
-        if(!(ReadFile (comPort, &tempuint8, 1, &readIn, 0)))
+
+        pktChksm = tempui8 << 8;
+        if(getCOMBytes(comportptr, &tempui8, 1, comRetries) < 1)
         {
-            CloseHandle(comPort);
-            printf("Didn't get checksum low byte in COM%d\n", i);
-            continue;	// didn't get checksum data
+            printf("Couldn't get chksm low byte");
+            opi_closeuce_com(comportptr);
+            continue;
         }
-        pktChksm += tempuint8;
+
+        pktChksm += tempui8;
         if(pktChksm != calcChksm)
         {
-            CloseHandle(comPort);
-            printf("Checksum didn't match in COM%d\n", i);
+           printf("Checksum didn't match");
+            opi_closeuce_com(comportptr);
             continue;
         }
         if(!((recBuf[12] == 'O') && (recBuf[13] == 'P') && (recBuf[14] == 'I')
              && (recBuf[15] == 'U') && (recBuf[16] == 'C') && (recBuf[17] == 'E')))
         {
-            CloseHandle(comPort);
-            printf("Device not OPIUCE in COM%d\n", i);
+            printf("Device not OPIUCD");
+            opi_closeuce_com(comportptr);
             continue;
         }
-        // everything checks out if it gets here so get out
-        //printf("OPIUCD found on COM%d\n", i);
-
-        *comportptr = comPort;	// Need to copy to passed pointer so that it still works
         return 0;
     }
+
+    (void) closedir(dp);
+    // failed if got here
     return -1;
 }
 
@@ -346,7 +407,10 @@ int opi_openuce_com(HANDLE* comportptr)
   */
 void opi_closeuce_com(HANDLE* comportptr)
 {
-    CloseHandle(*comportptr);
+    if(comportptr == NULL)
+        return;
+    close(*comportptr);
+    *comportptr = -1;
 }
 
 
@@ -1103,89 +1167,4 @@ int opiuce_resetrelaxdata(HANDLE *comportptr)
     if(opipkt_get_com(&opipkt, comportptr) != 0) return -1;
     if(opipkt.dataCode == 0x40)   return 0;
     else return -1;
-}
-
-
-/***
-  *	Turn controller microSD SPI interface on
-  *	Inputs:
-  *		comportptr, pointer to comport assigned to UC
-  *	Returns:
-  *		0 if ok
-  *		-1 if error
-  */
-int opiuce_turnusdspion(HANDLE *comportptr)
-{
-    OPIPKT_t opipkt;
-
-    opipkt.dataCode = 0x20;
-    opipkt.payload[0] = 0x0B;
-    opipkt.length = 1;
-    if(opipkt_put_com(&opipkt, comportptr) != 0) return -1;
-    if(opipkt_get_com(&opipkt, comportptr) != 0) return -1;
-    if(opipkt.dataCode == 0x40)   return 0;
-    else return -1;
-}
-
-
-/***
-  *	Turn controller microSD SPI interface off
-  *	Inputs:
-  *		comportptr, pointer to comport assigned to UC
-  *	Returns:
-  *		0 if ok
-  *		-1 if error
-  */
-int opiuce_turnusdspioff(HANDLE *comportptr)
-{
-    OPIPKT_t opipkt;
-
-    opipkt.dataCode = 0x20;
-    opipkt.payload[0] = 0x0C;
-    opipkt.length = 1;
-    if(opipkt_put_com(&opipkt, comportptr) != 0) return -1;
-    if(opipkt_get_com(&opipkt, comportptr) != 0) return -1;
-    if(opipkt.dataCode == 0x40)   return 0;
-    else return -1;
-}
-
-
-/***
-  *	Turn controller microSD SPI interface off
-  *	Inputs:
-  *		comportptr, pointer to comport assigned to UC
-  *     pktptr, pointer to modified packet
-  *	Returns:
-  *		0 if ok
-  *		-1 if error
-  */
-int opiuce_triggertsign(HANDLE *comportptr, OPIPKT_t* pktptr)
-{
-
-    pktptr->dataCode = 0x20;
-    pktptr->payload[0] = 0x24;
-    pktptr->length = 1;
-    if(opipkt_put_com(pktptr, comportptr) != 0) return -1;
-    if(opipkt_get_com(pktptr, comportptr) != 0) return -1;
-    if((pktptr->dataCode == 0x20) && (pktptr->payload[0] == 0x25))   return 0;
-    else return -1;
-}
-
-/***
-  *	Put UC in battery cycle mode. Will disconnect USB
-  * and be unreachable until battery is drained.
-  *	Inputs:
-  *		comportptr, pointer to comport assigned to UC
-  *	Returns:
-  *		0 if successful
-  *		-1 if error
-  */
-int opiuce_battcycle(HANDLE *comportptr)
-{
-    OPIPKT_t opipkt;
-
-    opipkt.dataCode = 0x18;
-    opipkt.length = 0;
-    if (opipkt_put_com(&opipkt, comportptr) != 0) return -1;
-    else return 0;
 }

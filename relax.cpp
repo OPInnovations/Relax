@@ -379,6 +379,7 @@ void ReLax::timerEvent(QTimerEvent *event)
             if(opi_openuce_com(&comPort))
             {
                 liveEnableFlg = false;
+                qDebug() << "fail here 1";
             }
             else
             {
@@ -401,6 +402,7 @@ void ReLax::timerEvent(QTimerEvent *event)
                 if(opiuce_status(&comPort, &ucOpipkt) || (ucOpipkt.payload[DSNLEN+TSLEN+6+FWVLEN+1] == 0xFF))  // paired before
                 {
                     liveEnableFlg = false;
+                    qDebug() << "fail here2";
                 }
                 else
                 {

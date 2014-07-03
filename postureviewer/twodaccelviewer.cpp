@@ -53,9 +53,7 @@ void twoDaccelviewer::reset()
     activityText = 0;
 
     firstdraw=true;
-    x_calm=0;
-    y_calm=0;
-    z_calm=0;
+
     lowcount = 0;
     medcount = 0;
     highcount = 0;
@@ -272,7 +270,7 @@ void twoDaccelviewer::routinedraw()
         Mainscene->clear();
         zScene->clear();
         sizemyts=mytsQV.size();
-        if(sizemyts>=10000) reduction=sizemyts/5000; //max 10000 points
+        if(sizemyts>=5000) reduction=sizemyts/2500; //max 5000 points
         if(reduction<2) reduction=1;
 
         for(i = 0; i<sizemyts/reduction;i++) //reduction
@@ -402,7 +400,7 @@ void twoDaccelviewer::timerEvent(QTimerEvent *)
     {
         reduction=1;
         sizemyts=mytsQV.size();
-        if(sizemyts>=10000) reduction=sizemyts/5000; //max 10000 points
+        if(sizemyts>=5000) reduction=sizemyts/2500; //max 5000 points
         if(reduction<2) reduction=1;
         if(timerindexcount<(sizemyts/reduction)) //reduction
         {
@@ -637,9 +635,11 @@ void twoDaccelviewer::livedisplayroutine(QVector<qint16> *accxQVp, QVector<qint1
     // draw the Z data
     zXDelta = ((float) LIVEPVSHOWSECMAX*FRMSPERSEC)/ui->zGV->width();   // figure out how many data points to take
     myQPP2.moveTo(ui->zGV->x(), ui->zGV->y()+ui->zGV->height()/2-acczqvect.at(0)/PVZSCALE);
-    for(i = 1; i < acczqvect.size(); i++)
+    for(i = 1; i < ui->zGV->width(); i++)
     {
-        myQPP2.lineTo(ui->zGV->x()+((qint32) (((float)i)/zXDelta)), ui->zGV->y()+ui->zGV->height()/2-acczqvect.at(i)/PVZSCALE);
+        if(i*zXDelta > (acczqvect.size()-1))    // no more data
+            break;
+        myQPP2.lineTo(ui->zGV->x()+i, ui->zGV->y()+ui->zGV->height()/2-acczqvect.at((qint32) (i*zXDelta))/PVZSCALE);
     }
     zScene->addPath(myQPP2, QPen(Qt::red));
 

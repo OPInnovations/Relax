@@ -2,7 +2,7 @@
 #define TWODACCELVIEWER_H
 
 #include <QtGui>
-#include "../opi_uce_win.h"
+#include "../opi_uce_osx.h"
 #include "../helper_funcs.h"
 
 

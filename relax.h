@@ -8,7 +8,7 @@
   *
   */
 #include <QtGui>
-#include "opi_uce_win.h"
+#include "opi_uce_osx.h"
 #include "faderwidget.h"
 #include "qqwidget.h"
 #include "FFT/qfouriertransformer.h"
